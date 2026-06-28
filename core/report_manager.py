@@ -6,7 +6,9 @@ from database_manager import DatabaseManager
 import os, json
 import jdatetime
 import asyncio
-
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 from PIL import Image
 
 
@@ -445,6 +447,87 @@ class ReportManager:
             f"{table_name}_report.pdf"
         )
 
+        self.add_chart_to_pdf(pdf)
         pdf.output(file_path)
-
         return file_path
+    
+    def create_demo_chart(self):
+        """
+        ساخت نمودار نمونه (فعلاً با داده‌های ثابت)
+        """
+
+        chart_path = os.path.join(
+            self.reports_path,
+            "temp_chart.png"
+        )
+
+        months = [
+            "Far",
+            "Ord",
+            "Kho",
+            "Tir",
+            "Mor",
+            "Sha"
+        ]
+
+        values = [
+            5,
+            8,
+            2,
+            11,
+            7,
+            4
+        ]
+
+        plt.figure(figsize=(8,4))
+
+        plt.plot(
+            months,
+            values,
+            marker="o",
+            linewidth=2
+        )
+
+        plt.title("Monthly Non-Conformities")
+        plt.xlabel("Month")
+        plt.ylabel("Count")
+
+        plt.grid(True)
+
+        plt.tight_layout()
+
+        plt.savefig(chart_path, dpi=200)
+
+        plt.close()
+
+        return chart_path
+    
+    
+    def add_chart_to_pdf(self, pdf):
+
+        chart_path = self.create_demo_chart()
+
+        pdf.add_page()
+
+        title = get_display(
+            reshape("نمودار آماری")
+        )
+
+        pdf.set_font("YekanBakh", size=16)
+
+        pdf.cell(
+            pdf.epw,
+            10,
+            txt=title,
+            new_x="LMARGIN",
+            new_y="NEXT",
+            align="C"
+        )
+
+        pdf.ln(10)
+
+        pdf.image(
+            chart_path,
+            x=20,
+            w=170
+        )
