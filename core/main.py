@@ -1,5 +1,14 @@
 import os
+import datetime
+import logging
 from dotenv import load_dotenv
+
+load_dotenv()
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 from bale import Bot, Message, MenuKeyboardMarkup, MenuKeyboardButton,InputFile,InlineKeyboardMarkup,InlineKeyboardButton
 import json ,asyncio
 import forms.R_and_D_form as R_and_D
@@ -8,7 +17,23 @@ from report_manager import ReportManager
 import forms.Defect_and_repair_registration_form as defect_form
 import forms.Product_non_conformity_form as product_non_conformity_form
 import FormHandler
+from ai.ai_controller import AIController
 
+
+
+
+async def daily_ai_history_reset(ai_controller: AIController):
+    """هر شب ساعت ۰۰:۰۰ تاریخچه‌ی مکالمه‌ی AI همه‌ی کاربران را پاک می‌کند."""
+
+    while True:
+        now = datetime.datetime.now()
+        next_midnight = (now + datetime.timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        await asyncio.sleep((next_midnight - now).total_seconds())
+
+        ai_controller.history.clear_all()
+        print("AI conversation history cleared (daily reset)")
 
 
 async def file_sender(bot :Bot,chat_id, file_path):
@@ -37,7 +62,6 @@ async def handle_instructions(bot:Bot, chat_id, data,inst_files):
         chat_id,
         InputFile(inst_files[data][0])
     )
-
 
 ######### show form #############
 
@@ -103,11 +127,12 @@ async def handle_edit_form(message:Message , form_files:dict):
 
     keyboard = InlineKeyboardMarkup()
 
-    for i, k in enumerate(form_files.keys(), 1):
-        keyboard.add(
-            InlineKeyboardButton(k, callback_data=f"edit_form_{k}"),
-            row=i
-        )
+    # for i, k in enumerate(form_files.keys(), 1):
+    #     keyboard.add(
+    #         InlineKeyboardButton(k, callback_data=f"edit_form_{k}"),
+    #         row=i
+    #     )
+    keyboard.add(InlineKeyboardButton("فرم تحقیق و توسعه", callback_data=f"edit_form_فرم تحقیق و توسعه"))
 
     await message.reply("کدام فرم را می‌خواهید ویرایش کنید؟", components=keyboard)
 
@@ -200,6 +225,10 @@ async def handle_selected_form_report(message, data, db_manager:DatabaseManager,
         ) 
 
     else:
+        await message.reply(
+        "⏳ گزارش در حال آماده‌سازی است.\n"
+        "لطفاً چند لحظه صبر کنید..."
+        )
         data = data.replace("reports","form")
         file_path = await report_manager.create_pdf(f"{data}")
         await file_sender(
@@ -213,7 +242,10 @@ async def handle_R_and_D_report(callback, data,report_manager:ReportManager):
 
     chat_id = callback.message.chat.id
     project_title = data.replace("R_and_D_report_", "")
-
+    await callback.message.reply(
+        "⏳ گزارش در حال آماده‌سازی است.\n"
+        "لطفاً چند لحظه صبر کنید..."
+    )
     file_path = await report_manager.create_pdf("R_and_D_form", project_title)
     await file_sender(bot,chat_id, file_path)
    
@@ -226,9 +258,9 @@ db_manager = DatabaseManager()
  
 report_manager =  ReportManager(db_manager)
 
+ai_controller = AIController()
 
 
-load_dotenv()
 
 BASE_DIR =os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 inst_files_addr = os.path.join(BASE_DIR, "docs", "inst_names.json")
@@ -239,6 +271,9 @@ form_inst_files_addr = os.path.join(BASE_DIR, "docs", "forms_inst_names.json")
 forms_reports_names_addr = os.path.join(BASE_DIR, "docs", "forms_reports_names.json")
 
 API_TOKEN = os.getenv("API_TOKEN")
+
+# کاربرانی که با /ai وارد حالت مکالمه‌ی مستقیم با AI شده‌اند: user_id -> "local"/"api"
+ai_sessions = {}
 
 
 with open(inst_files_addr ,'r',encoding='utf-8') as f:
@@ -266,21 +301,38 @@ form_handler = FormHandler.Form_Handler(bot, db_manager,inst_files,form_files,fo
 async def on_ready():
         print("robot is running successfully...")
         asyncio.create_task(form_handler.cleanup_inactive_forms()) # شبیه به garbage_collector کار میکنه برای فرم های ناقص رها شده
+        asyncio.create_task(daily_ai_history_reset(ai_controller))
 
 
 @bot.event
 async def on_message(message: Message):
-        
-        
-        handled = await form_handler.handle_message(message) #بررسی کن که مربوط به پاسخ فرم هاست یا ربطی نداره
-        if handled:
-            return
 
-
-        if not message.content  is None:
+        if not message.content is None:
             text = message.content.strip()
         else:
             text = ""
+
+        user_id = message.from_user.id
+
+        # اگر کاربر داخل حالت مکالمه‌ی AI است، هر پیامی جز /exit یا exit مستقیم به AI فرستاده می‌شود
+        if user_id in ai_sessions:
+
+            if text == "/exit" or text == "exit":
+                del ai_sessions[user_id]
+                # مثل زدن /start رفتار کن
+                text = "/start"
+            else:
+                try:
+                    answer = await ai_controller.handle(text, provider=ai_sessions[user_id], user_id=user_id)
+                except RuntimeError as e:
+                    answer = f"⚠️ خطا: {e}"
+
+                await message.reply(answer)
+                return
+
+        handled = await form_handler.handle_message(message) #بررسی کن که مربوط به پاسخ فرم هاست یا ربطی نداره
+        if handled:
+            return
 
         if text == "/start" or text == "لغو فرم":
 
@@ -295,14 +347,67 @@ async def on_message(message: Message):
             "🤖 به دستیار هوشمند سازمان خوش آمدید\n\n"
             "این سامانه با هدف دیجیتالی‌سازی فرآیندهای سازمانی، کاهش زمان انجام امور و افزایش دقت در ثبت و مدیریت اطلاعات طراحی شده است.\n\n"
             "📋 امکانات سامانه:\n"
-            "• ثبت، ویرایش و پیگیری فرم‌های سازمانی\n"
+            "• ثبت و پیگیری فرم‌های سازمانی\n"
             "• تولید گزارش‌های حرفه‌ای در قالب PDF\n"
             "• دسترسی سریع به آیین‌نامه‌ها و مستندات\n"
-            "• مدیریت یکپارچه اطلاعات و سوابق\n\n"
+            "• مدیریت یکپارچه اطلاعات و سوابق\n"
+            "• پاسخ دهی هوشمند به سوالات شما بر مبنای اطلاعات سازمان\n\n"
             "✨ این ربات متناسب با ساختار هر سازمان قابل سفارشی‌سازی است و امکان افزودن فرم‌ها، گزارش‌ها، گردش کار، داشبوردهای مدیریتی و قابلیت‌های هوشمند بر اساس نیاز مجموعه وجود دارد.\n\n"
             "👇 لطفاً یکی از گزینه‌های زیر را انتخاب کنید.",
             components=keyboard
             )     
+
+        elif text == "/whoami":
+
+            await message.reply(f"آی‌دی عددی شما: {message.from_user.id}")
+            return
+
+        elif text.startswith("/ai_mode"):
+
+            requested = text.replace("/ai_mode", "").strip()
+
+            if not requested:
+                current = ai_controller.get_provider()
+                await message.reply(f"مدل فعلی: {current}\nبرای تغییر: /ai_mode local یا /ai_mode api")
+                return
+
+            if requested not in ("local", "api"):
+                await message.reply("مقدار نامعتبر. از local یا api استفاده کن.")
+                return
+
+            try:
+                ai_controller.set_provider(requested)
+            except RuntimeError as e:
+                await message.reply(f"⚠️ تغییر مدل ناموفق بود: {e}")
+                return
+
+            label = "لوکال (Ollama)" if requested == "local" else "API (AvalAI) — توجه: داده به بیرون شرکت ارسال می‌شود"
+            await message.reply(f"✅ مدل هوش مصنوعی به «{label}» تغییر کرد.")
+            return
+
+        elif text == "/ai":
+
+            keyboard = InlineKeyboardMarkup()
+            keyboard.add(InlineKeyboardButton("لوکال", callback_data="ai_session_local"))
+            keyboard.add(InlineKeyboardButton("API", callback_data="ai_session_api"))
+
+            await message.reply("کدوم مدل رو می‌خوای استفاده کنی؟", components=keyboard)
+            return
+
+        elif text.startswith("/ai"):
+
+            prompt = text.replace("/ai", "").strip()
+
+            await message.reply("🧠 در حال تحلیل سوال...")
+
+            try:
+                answer = await ai_controller.handle(prompt)
+            except RuntimeError as e:
+                answer = f"⚠️ خطا: {e}"
+
+            await message.reply(answer)
+
+            return
 
         elif text == "آئین نامه‌ها":
             
@@ -319,7 +424,7 @@ async def on_message(message: Message):
 
             keyboard = InlineKeyboardMarkup()
             keyboard.add(InlineKeyboardButton("فرم جدید",callback_data="فرم جدید"),row=1)
-            keyboard.add(InlineKeyboardButton("ویرایش فرم موجود",callback_data="ویرایش فرم موجود"),row=2)
+            #keyboard.add(InlineKeyboardButton("ویرایش فرم موجود",callback_data="ویرایش فرم موجود"),row=2)
             await message.reply("یک گزینه را انتخاب کنید.",components=keyboard)
     
 
@@ -351,7 +456,23 @@ async def on_callback(callback):
 
         # ===== ROUTER =====
 
-        if data == "فرم جدید":
+        if data in ("ai_session_local", "ai_session_api"):
+
+            requested = "local" if data == "ai_session_local" else "api"
+
+            if requested == "api":
+                try:
+                    ai_controller.validate_provider("api")
+                except RuntimeError as e:
+                    await message.reply(f"⚠️ فعال‌سازی API ناموفق بود: {e}")
+                    return
+
+            ai_sessions[user_id] = requested
+
+            label = "لوکال (Ollama)" if requested == "local" else "API (AvalAI) — توجه: داده به بیرون شرکت ارسال می‌شود"
+            await message.reply(f"✅ وارد حالت AI ({label}) شدید. حالا مستقیم بنویس، برای خروج /exit بزن.")
+
+        elif data == "فرم جدید":
             
             await handle_show_new_form(bot,message,form_files)
 
@@ -362,6 +483,10 @@ async def on_callback(callback):
         elif data.startswith("edit_form_"):
             await handle_edit_selected_form(message, data,db_manager) 
         
+        elif data in ("add_new_test_R_and_D_project_data","add_final_R_and_D_project_data"):
+
+            await handle_add_new_test_or_final_R_and_D_project_data(message,data,form_handler,db_manager)
+
         elif data.startswith("add_final_R_and_D_project_data_"):
             
             r_and_d = R_and_D.R_and_D_form(db_manager)
@@ -371,7 +496,7 @@ async def on_callback(callback):
         elif data.startswith("add_new_test_R_and_D_project_data_"):
            
             r_and_d = R_and_D.R_and_D_form(db_manager)
-            project_title = data.replace("add_new_test_R_and_D_project_","")
+            project_title = data.replace("add_new_test_R_and_D_project_data","")
             await r_and_d.add_new_test_R_and_D_project(project_title,callback,form_handler)
 
         elif data in inst_files:

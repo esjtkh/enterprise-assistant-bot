@@ -11,6 +11,23 @@ __pycache__/
 # Reports
 docs/reports/
 
+# Runtime database
+*.db
+*.db-wal
+*.db-shm
+
+# AI runtime state (local/api provider switch)
+core/ai/provider_state.json
+
+# AI runtime cache (auto-generated table descriptions for new/unmapped tables)
+core/ai/schema_notes_cache.json
+
+# RAG vector store (regenerated via ai/ingestion scripts) and raw scraped data
+core/ai/vector_store/
+core/ai/ingestion/data/
+
 # VSCode
 .vscode/
+
+
 

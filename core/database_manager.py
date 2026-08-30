@@ -1,4 +1,4 @@
-import aiosqlite         
+import aiosqlite
 import sqlite3
 from contextlib import asynccontextmanager
 from typing import List, Tuple, Any, Dict, Optional
@@ -338,3 +338,38 @@ class DatabaseManager:
 
             
             return row , columns,variable_parameters_rows,variable_parameters_columns,final_project_data_rows,final_project_data_columns
+
+
+    def get_database_schema(self) -> str:
+        """اسکیمای جداول را برمی‌گرداند؛ توسط ماژول ai برای NL→SQL استفاده می‌شود"""
+
+        conn = sqlite3.connect(self.db_name)
+
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT name
+            FROM sqlite_master
+            WHERE type='table'
+            AND name NOT LIKE 'sqlite_%'
+        """)
+
+        tables = cur.fetchall()
+
+        schema = ""
+
+        for (table,) in tables:
+
+            schema += f"\nTable: {table}\n"
+
+            cur.execute(f"PRAGMA table_info({table})")
+
+            cols = cur.fetchall()
+
+            for col in cols:
+
+                schema += f"{col[1]} ({col[2]})\n"
+
+        conn.close()
+
+        return schema
