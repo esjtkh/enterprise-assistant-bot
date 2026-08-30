@@ -29,5 +29,6 @@ core/ai/ingestion/data/
 # VSCode
 .vscode/
 
+.claude/
 
 
